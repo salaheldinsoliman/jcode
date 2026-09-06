@@ -74,6 +74,17 @@ impl Tool for WriteTool {
             None
         };
 
+        // Experimental taint-analysis gate (security-context experiment):
+        // before a `.py` write lands, check whether it introduces new
+        // taint findings not present in the project today. No-ops for
+        // non-Python files or when the analyzer isn't available.
+        if let Some(refusal) =
+            super::write_security_gate::python_write_refusal(ctx.working_dir.clone(), &path, &params.content)
+                .await
+        {
+            return Err(anyhow::anyhow!(refusal));
+        }
+
         // Write the file
         tokio::fs::write(&path, &params.content).await?;
 

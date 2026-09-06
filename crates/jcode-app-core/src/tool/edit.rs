@@ -109,6 +109,15 @@ impl Tool for EditTool {
         // Find line number where edit starts
         let start_line = find_line_number(&content, &params.old_string);
 
+        // Experimental taint-analysis gate (security-context experiment);
+        // see write_security_gate for details.
+        if let Some(refusal) =
+            super::write_security_gate::python_write_refusal(ctx.working_dir.clone(), &path, &new_content)
+                .await
+        {
+            return Err(anyhow::anyhow!(refusal));
+        }
+
         // Write back
         tokio::fs::write(&path, &new_content).await?;
 
