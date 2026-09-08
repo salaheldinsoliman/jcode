@@ -1,14 +1,3 @@
-//! Experimental taint-analysis gate for `write`/`edit`/`multiedit`.
-//!
-//! Mirrors `bash_destructive_gate.rs`'s shape: kept in its own file so the
-//! policy seam stays easy to find and review. Where the bash gate stands
-//! between a model's `rm -rf` and the user's data, this one stands between a
-//! model's Python write and a newly introduced taint path (SQLi/XSS/RCE
-//! sink reachable from user input) — see `jcode-security-lint`.
-//!
-//! Scoped to `.py` files for now (the analyzer, `tiny_taint`, is Python-only)
-//! and fails open: a missing/broken analyzer must degrade to "no policy",
-//! not block every Python write in every session.
 
 use std::path::{Path, PathBuf};
 
