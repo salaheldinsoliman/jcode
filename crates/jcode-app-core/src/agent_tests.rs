@@ -14,6 +14,9 @@ mod concurrency;
 #[path = "agent_tests/concurrency_construction.rs"]
 mod concurrency_construction;
 
+#[path = "agent_tests/security_graph.rs"]
+mod security_graph;
+
 struct DelayedProvider {
     open_delay: Duration,
     first_event_delay: Duration,

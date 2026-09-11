@@ -213,6 +213,14 @@ impl Agent {
                 messages_with_memory.push(memory_msg);
             }
 
+            let prompt_has_recent_tool_result =
+                Self::messages_end_with_tool_result(&messages_with_memory);
+            let security_context_index = messages_with_memory.len();
+            if let Some(context) = self.security_context_message()? {
+                ephemeral_signature_messages.push(context.clone());
+                messages_with_memory.push(context);
+            }
+
             logging::info(&format!(
                 "API call starting: {} messages, {} tools",
                 messages_with_memory.len(),
@@ -225,7 +233,6 @@ impl Agent {
                 .message_timestamps
                 .then(|| Message::with_timestamps(&messages_with_memory));
             let send_messages = stamped.as_deref().unwrap_or(&messages_with_memory);
-            let prompt_has_recent_tool_result = Self::messages_end_with_tool_result(send_messages);
             let provider = Arc::clone(&self.provider);
             // Capture the model id the request was issued with. A provider may
             // transparently switch models mid-request (e.g. Anthropic's retired
@@ -249,6 +256,10 @@ impl Agent {
             drop(cache_signature_messages);
             drop(ephemeral_signature_messages);
             let mut keepalive = stream_keepalive_ticker();
+            self.log_security_context_request(
+                send_messages.get(security_context_index),
+                "included_in_request",
+            );
             let mut stream = {
                 let mut complete_future = std::pin::pin!(provider.complete_split(
                     send_messages,
@@ -303,6 +314,11 @@ impl Agent {
                     }
                 }
             };
+
+            self.log_security_context_request(
+                send_messages.get(security_context_index),
+                "provider_stream_open",
+            );
 
             // `complete_split` has consumed the request and returned an owned
             // response stream. Keeping these full transcript snapshots alive

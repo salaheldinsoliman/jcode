@@ -3228,6 +3228,7 @@ dependencies = [
  "jcode-provider-openrouter",
  "jcode-provider-openrouter-runtime",
  "jcode-render-core",
+ "jcode-security-graph",
  "jcode-session-types",
  "jcode-side-panel-types",
  "jcode-storage",
@@ -3874,6 +3875,17 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "jcode-security-graph"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "tempfile",
 ]
 

@@ -104,6 +104,7 @@ jcode-compaction-core = { path = "../jcode-compaction-core" }
 jcode-config-types = { path = "../jcode-config-types" }
 jcode-core = { path = "../jcode-core" }
 jcode-memory-types = { path = "../jcode-memory-types" }
+jcode-security-graph = { path = "../jcode-security-graph" }
 jcode-message-types = { path = "../jcode-message-types" }
 jcode-plan = { path = "../jcode-plan" }
 jcode-protocol = { path = "../jcode-protocol" }

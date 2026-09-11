@@ -73,6 +73,7 @@ pub mod registry;
 pub mod runtime_memory_log;
 pub mod safety;
 pub mod secret_input;
+pub use jcode_security_graph as security_graph;
 pub mod session;
 pub mod session_list_cache;
 pub mod session_metrics;

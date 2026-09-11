@@ -27,6 +27,7 @@ members = [
     "crates/jcode-config-types",
     "crates/jcode-command-risk",
     "crates/jcode-security-lint",
+    "crates/jcode-security-graph",
     "crates/jcode-core",
     "crates/jcode-fuzzy",
     "crates/jcode-harness-api",

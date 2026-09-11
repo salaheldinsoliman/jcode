@@ -147,6 +147,15 @@ impl Agent {
                 sequential_single_tool_rounds = 0;
             }
 
+            // Keep continuation detection about the conversation, not its
+            // ephemeral security supplement.
+            let prompt_has_recent_tool_result =
+                Self::messages_end_with_tool_result(&messages_with_memory);
+            let security_context_index = messages_with_memory.len();
+            if let Some(context) = self.security_context_message()? {
+                messages_with_memory.push(context);
+            }
+
             logging::info(&format!(
                 "API call starting: {} messages, {} tools",
                 messages_with_memory.len(),
@@ -166,8 +175,11 @@ impl Agent {
                 .message_timestamps
                 .then(|| Message::with_timestamps(&messages_with_memory));
             let send_messages = stamped.as_deref().unwrap_or(&messages_with_memory);
-            let prompt_has_recent_tool_result = Self::messages_end_with_tool_result(send_messages);
             self.last_status_detail = None;
+            self.log_security_context_request(
+                send_messages.get(security_context_index),
+                "included_in_request",
+            );
             let mut stream = match self
                 .provider
                 .complete_split(
@@ -197,6 +209,11 @@ impl Agent {
                     return Err(e);
                 }
             };
+
+            self.log_security_context_request(
+                send_messages.get(security_context_index),
+                "provider_stream_open",
+            );
 
             // The provider returned an owned stream, so the request transcript
             // copies are no longer needed while the response is consumed.

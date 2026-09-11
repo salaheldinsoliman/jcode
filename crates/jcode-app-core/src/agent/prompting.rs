@@ -1,8 +1,107 @@
 use super::Agent;
 use crate::logging;
-use crate::message::{Message, ToolDefinition};
+use crate::message::{ContentBlock, Message, ToolDefinition};
 
 impl Agent {
+    /// Override discovery for an isolated experiment or an embedding application.
+    /// None at construction means use the process environment and project file.
+    pub fn set_security_graph_options(&mut self, options: crate::security_graph::ContextOptions) {
+        self.security_graph_options = Some(options);
+    }
+
+    /// Rebuild outside conversational memory so first requests, tool continuations,
+    /// compaction and resumed sessions receive the current graph independently of
+    /// memory enablement, expiry and deduplication. Never append it to history.
+    pub(super) fn security_context_message(&self) -> anyhow::Result<Option<Message>> {
+        let options = match &self.security_graph_options {
+            Some(options) => options.clone(),
+            None => crate::security_graph::ContextOptions::from_env()?,
+        };
+        if !options.enabled {
+            return Ok(None);
+        }
+        let working_dir = match &self.session.working_dir {
+            Some(directory) => std::path::PathBuf::from(directory),
+            None => std::env::current_dir()?,
+        };
+        let Some(context) = crate::security_graph::load_context(&working_dir, &options)? else {
+            return Ok(None);
+        };
+        let context_hash = crate::security_graph::content_hash(context.prompt.as_bytes());
+        if super::utils::trace_enabled() {
+            eprintln!(
+                "[trace] security_graph loaded session={} path={} graph_hash={} context_hash={} nodes={} edges={} sources_match={} bytes={}",
+                self.session.id,
+                context.graph_path.display(),
+                context.graph_hash,
+                context_hash,
+                context.node_count,
+                context.edge_count,
+                context.sources_match,
+                context.prompt.len()
+            );
+        }
+        logging::event_info(
+            "SECURITY_CONTEXT",
+            vec![
+                ("session_id".to_string(), self.session.id.clone()),
+                (
+                    "graph_path".to_string(),
+                    context.graph_path.display().to_string(),
+                ),
+                ("graph_hash".to_string(), context.graph_hash),
+                ("context_hash".to_string(), context_hash),
+                ("nodes".to_string(), context.node_count.to_string()),
+                ("edges".to_string(), context.edge_count.to_string()),
+                (
+                    "sources_match".to_string(),
+                    context.sources_match.to_string(),
+                ),
+                (
+                    "context_bytes".to_string(),
+                    context.prompt.len().to_string(),
+                ),
+            ],
+        );
+        Ok(Some(Message::user(&context.prompt)))
+    }
+
+    /// Inspect the actual ephemeral message passed to the provider. A stream
+    /// opening confirms dispatch succeeded, not that the model obeyed the graph.
+    /// Log fingerprints only; repository descriptions may contain sensitive data.
+    pub(super) fn log_security_context_request(&self, message: Option<&Message>, stage: &str) {
+        let Some(message) = message else { return };
+        let Some(context) = message.content.iter().find_map(|block| match block {
+            ContentBlock::Text { text, .. } => {
+                text.find("<security-context>").map(|start| &text[start..])
+            }
+            _ => None,
+        }) else {
+            return;
+        };
+        let context_hash = crate::security_graph::content_hash(context.as_bytes());
+        let model = self.provider.model();
+        logging::event_info(
+            "SECURITY_CONTEXT_REQUEST",
+            vec![
+                ("session_id".to_string(), self.session.id.clone()),
+                ("stage".to_string(), stage.to_string()),
+                ("context_hash".to_string(), context_hash.clone()),
+                ("model".to_string(), model.clone()),
+                ("context_bytes".to_string(), context.len().to_string()),
+            ],
+        );
+        if super::utils::trace_enabled() {
+            eprintln!(
+                "[trace] security_graph {stage} session={} model={} context_hash={} bytes={}",
+                self.session.id,
+                model,
+                context_hash,
+                context.len()
+            );
+        }
+    }
+
     pub(super) fn log_prompt_prefix_accounting(
         &self,
         split: &crate::prompt::SplitSystemPrompt,
