@@ -171,7 +171,34 @@ struct SourceStatus<'a> {
     state: &'static str,
 }
 
+// A small-graph MVP must not accidentally read unbounded source artifacts.
+const MAX_SOURCE_BYTES: usize = 2 * 1024 * 1024;
+
+/// The file as last committed, or None when that cannot be determined.
+///
+/// An agent editing the code it was handed a graph for is doing its job, and
+/// hashing its half-finished work would report the graph as stale from the
+/// first edit onward -- telling the model to distrust the context for the rest
+/// of the session. The committed tree is the state the graph was written
+/// against, so it is what freshness is judged against.
+fn committed_hash(repository: &Path, relative: &str) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .arg("show")
+        .arg(format!("HEAD:{relative}"))
+        .output()
+        .ok()?;
+    if !output.status.success() || output.stdout.len() > MAX_SOURCE_BYTES {
+        return None;
+    }
+    Some(content_hash(&output.stdout))
+}
+
 fn source_hash(repository: &Path, relative: &str) -> Result<String> {
+    if let Some(hash) = committed_hash(repository, relative) {
+        return Ok(hash);
+    }
     let path = repository.join(relative).canonicalize()?;
     ensure!(
         path.starts_with(repository),
@@ -186,8 +213,6 @@ fn source_hash(repository: &Path, relative: &str) -> Result<String> {
         file.metadata()?.is_file(),
         "source evidence must be a regular file"
     );
-    // A small-graph MVP must not accidentally read unbounded source artifacts.
-    const MAX_SOURCE_BYTES: usize = 2 * 1024 * 1024;
     let mut bytes = Vec::new();
     file.take((MAX_SOURCE_BYTES + 1) as u64)
         .read_to_end(&mut bytes)?;

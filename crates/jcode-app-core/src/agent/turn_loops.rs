@@ -1,6 +1,39 @@
 use super::*;
 use crate::{terminal_eprintln as eprintln, terminal_print as print, terminal_println as println};
 
+/// Whether a mid-stream failure is worth another attempt.
+///
+/// Matched on the message because the transport already succeeded: by the time
+/// the far side reports `provider_unavailable` or an overloaded upstream there
+/// is no status code left to inspect. Anything not listed here -- a bad key, a
+/// rejected request, a context limit -- fails immediately, since retrying those
+/// only burns the budget.
+fn is_transient_stream_error(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "provider_unavailable",
+        "inference generation failed",
+        "overloaded",
+        "temporarily unavailable",
+        "service unavailable",
+        "internal server error",
+        "bad gateway",
+        "gateway timeout",
+        "connection reset",
+        "connection closed",
+        "stream ended unexpectedly",
+        "timed out",
+        // OpenRouter via LiteLLM: "litellm.Timeout: Timeout Error: ... Upstream
+        // idle timeout exceeded", which contains neither phrase above.
+        "timeout error",
+        "idle timeout",
+        "rate limit",
+        "too many requests",
+    ]
+    .iter()
+    .any(|marker| message.contains(marker))
+}
+
 impl Agent {
     /// Speculatively prewarm the provider while a newly created session is idle.
     ///
@@ -19,6 +52,11 @@ impl Agent {
     /// Run turns until no more tool calls
     /// Maximum number of context-limit compaction retries before giving up.
     pub(super) const MAX_CONTEXT_LIMIT_RETRIES: u32 = 5;
+    /// Transient upstream failures that arrive *inside* an open stream rather
+    /// than as an HTTP status, so `provider.max_retries` never sees them: the
+    /// request succeeded and then the far side gave up mid-generation. One bad
+    /// minute upstream otherwise ends a long agent session outright.
+    pub(super) const MAX_STREAM_ERROR_RETRIES: u32 = 4;
     pub(super) const MAX_INCOMPLETE_CONTINUATION_ATTEMPTS: u32 = 3;
     /// Retries allowed when the provider returns an empty response right after
     /// tool results. This is a transient provider hiccup, not a signal that the
@@ -57,6 +95,7 @@ impl Agent {
         let mut final_text = String::new();
         let trace = trace_enabled();
         let mut context_limit_retries = 0u32;
+        let mut stream_error_retries = 0u32;
         let mut incomplete_continuations = 0u32;
         let mut empty_post_tool_continuations = 0u32;
         let mut fable_guardrail_reconsiderations = 0u32;
@@ -268,6 +307,7 @@ impl Agent {
             let mut openai_native_compaction: Option<(String, usize)> = None;
 
             let mut retry_after_compaction = false;
+            let mut retry_after_stream_error = false;
             while let Some(event) = stream.next().await {
                 let event = match event {
                     Ok(event) => event,
@@ -299,6 +339,27 @@ impl Agent {
                                 ));
                             }
                             retry_after_compaction = true;
+                            break;
+                        }
+                        if is_transient_stream_error(&err_str)
+                            && stream_error_retries < Self::MAX_STREAM_ERROR_RETRIES
+                        {
+                            stream_error_retries += 1;
+                            let backoff = std::cmp::min(1u64 << stream_error_retries, 30);
+                            log_agent_provider_stream_lifecycle(
+                                logging::LogLevel::Warn,
+                                self,
+                                "stream_error_retry",
+                                api_start,
+                                vec![
+                                    ("mode", "blocking".to_string()),
+                                    ("error", err_str.clone()),
+                                    ("attempt", stream_error_retries.to_string()),
+                                    ("backoff_secs", backoff.to_string()),
+                                ],
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                            retry_after_stream_error = true;
                             break;
                         }
                         log_agent_provider_stream_lifecycle(
@@ -691,6 +752,37 @@ impl Agent {
                             retry_after_compaction = true;
                             break;
                         }
+                        // The upstream failure arrives here, as an error event inside a
+                        // stream that opened successfully -- not as a transport error --
+                        // so `provider.max_retries` never sees it.
+                        if is_transient_stream_error(&message)
+                            && stream_error_retries < Self::MAX_STREAM_ERROR_RETRIES
+                        {
+                            stream_error_retries += 1;
+                            // Honour the provider's own hint when it sends one.
+                            let backoff = retry_after_secs
+                                .unwrap_or_else(|| std::cmp::min(1u64 << stream_error_retries, 30));
+                            log_agent_provider_stream_lifecycle(
+                                logging::LogLevel::Warn,
+                                self,
+                                "stream_error_retry",
+                                api_start,
+                                vec![
+                                    ("mode", "blocking".to_string()),
+                                    ("error", message.clone()),
+                                    ("attempt", stream_error_retries.to_string()),
+                                    ("backoff_secs", backoff.to_string()),
+                                ],
+                            );
+                            if trace {
+                                eprintln!(
+                                    "[trace] stream_error_retry attempt={stream_error_retries} backoff={backoff}s"
+                                );
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                            retry_after_stream_error = true;
+                            break;
+                        }
                         log_agent_provider_stream_lifecycle(
                             logging::LogLevel::Error,
                             self,
@@ -710,6 +802,10 @@ impl Agent {
                         return Err(StreamError::new(message, retry_after_secs).into());
                     }
                 }
+            }
+
+            if retry_after_stream_error {
+                continue;
             }
 
             if retry_after_compaction {
@@ -1297,5 +1393,26 @@ mod tests {
         assert!(!Agent::should_inject_batch_nudge(true, false));
         assert!(Agent::BATCH_NUDGE.contains("use the batch tool"));
         assert!(Agent::BATCH_NUDGE.contains("result is required"));
+    }
+}
+
+#[cfg(test)]
+mod stream_error_retry_tests {
+    use super::is_transient_stream_error;
+
+    #[test]
+    fn retries_the_upstream_failure_that_ended_a_benchmark_session() {
+        assert!(is_transient_stream_error(
+            "litellm.APIError: APIError: OpenrouterException - Message: Upstream \
+             error from Darkbloom: inference generation failed, Metadata: \
+             {'error_type': 'provider_unavailable'}"
+        ));
+    }
+
+    #[test]
+    fn does_not_retry_what_another_attempt_cannot_fix() {
+        assert!(!is_transient_stream_error("401 Unauthorized: invalid api key"));
+        assert!(!is_transient_stream_error("context limit exceeded"));
+        assert!(!is_transient_stream_error("model not found"));
     }
 }
