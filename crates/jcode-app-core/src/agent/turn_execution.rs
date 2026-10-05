@@ -196,6 +196,7 @@ impl Agent {
         let preserve_debug = self.session.is_debug;
         let preserve_working_dir = self.session.working_dir.clone();
 
+        self.close_security_memory();
         self.session.mark_closed();
         self.finish_concurrency_tracking();
         self.persist_session_best_effort("pre-clear session close state");
@@ -210,6 +211,8 @@ impl Agent {
         new_session.working_dir = preserve_working_dir;
         new_session.ensure_initial_session_context_message();
 
+        self.security_memory =
+            Self::new_security_memory(crate::security_memory::SecurityMemoryOptions::from_env());
         self.session = new_session;
         self.begin_concurrency_tracking();
         self._tool_policy_registration = crate::tool::register_session_tool_policy(

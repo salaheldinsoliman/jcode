@@ -147,6 +147,11 @@ impl Agent {
                 sequential_single_tool_rounds = 0;
             }
 
+            let security_memory_context = self.security_memory_context_message_async().await;
+            if let Some(context) = &security_memory_context {
+                messages_with_memory.push(context.clone());
+            }
+
             logging::info(&format!(
                 "API call starting: {} messages, {} tools",
                 messages_with_memory.len(),
@@ -166,7 +171,12 @@ impl Agent {
                 .message_timestamps
                 .then(|| Message::with_timestamps(&messages_with_memory));
             let send_messages = stamped.as_deref().unwrap_or(&messages_with_memory);
-            let prompt_has_recent_tool_result = Self::messages_end_with_tool_result(send_messages);
+            let prompt_has_recent_tool_result =
+                Self::messages_end_with_tool_result(if security_memory_context.is_some() {
+                    &send_messages[..send_messages.len() - 1]
+                } else {
+                    send_messages
+                });
             self.last_status_detail = None;
             let mut stream = match self
                 .provider
@@ -623,10 +633,16 @@ impl Agent {
                             execution_mode: ToolExecutionMode::AgentTurn,
                         };
                         crate::telemetry::record_tool_call();
-                        let tool_result = self
-                            .registry
-                            .execute(&tool_name, ToolCall::normalize_input_to_object(input), ctx)
-                            .await;
+                        let input = ToolCall::normalize_input_to_object(input);
+                        let tool_result =
+                            self.registry.execute(&tool_name, input.clone(), ctx).await;
+                        Self::observe_security_tool(
+                            self.security_memory.as_ref(),
+                            &tool_name,
+                            &input,
+                            &tool_result,
+                            self.working_dir().map(std::path::Path::new),
+                        );
                         if tool_result.is_err() {
                             crate::telemetry::record_tool_failure();
                         }
@@ -1067,6 +1083,13 @@ impl Agent {
                 }));
 
                 let result = self.registry.execute(&tc.name, tc.input.clone(), ctx).await;
+                Self::observe_security_tool(
+                    self.security_memory.as_ref(),
+                    &tc.name,
+                    &tc.input,
+                    &result,
+                    self.working_dir().map(std::path::Path::new),
+                );
                 crate::telemetry::record_tool_call();
                 self.unlock_tools_if_needed(&tc.name);
                 let tool_elapsed = tool_start.elapsed();

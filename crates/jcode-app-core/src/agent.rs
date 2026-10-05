@@ -8,6 +8,7 @@ mod messages;
 mod prompting;
 mod provider;
 mod response_recovery;
+mod security_memory;
 mod status;
 mod streaming;
 mod tools;
@@ -179,6 +180,7 @@ struct RewindUndoSnapshot {
 }
 
 pub struct Agent {
+    security_memory: Option<Arc<crate::security_memory::SecurityMemorySession>>,
     provider: Arc<dyn Provider>,
     registry: Registry,
     skills: Arc<SkillRegistry>,
@@ -304,6 +306,9 @@ impl Agent {
             disabled_tools.clone(),
         );
         Self {
+            security_memory: Self::new_security_memory(
+                crate::security_memory::SecurityMemoryOptions::from_env(),
+            ),
             provider,
             registry,
             skills,
@@ -968,6 +973,7 @@ impl Agent {
 
     /// Mark this agent session as closed and persist it.
     pub fn mark_closed(&mut self) {
+        self.close_security_memory();
         self.finish_concurrency_tracking();
         self.persist_soft_interrupt_snapshot();
         self.session.mark_closed();

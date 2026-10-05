@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn security_memory_explicit_store_is_isolated_and_filters_lexical_results() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("task.json");
+    let manager = MemoryManager::new_test().with_store_path(&path);
+    let mut entry = MemoryEntry::new(
+        MemoryCategory::Custom("finding".into()),
+        "render template test fails",
+    );
+    entry.tags = vec![
+        "role:attacker".into(),
+        "kind:finding".into(),
+        "code:v1".into(),
+    ];
+    let id = manager.remember_in_store(entry.clone()).unwrap();
+    entry.id = "second-observation".into();
+    assert_eq!(id, manager.remember_in_store(entry).unwrap());
+    let filter = crate::security_memory::StoreFilter {
+        roles: vec!["attacker".into()],
+        ..Default::default()
+    };
+    let entries = manager
+        .find_similar_hybrid_in_store("render template", 8, &filter)
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].0.id, id);
+    assert_eq!(entries[0].0.strength, 2);
+    let filter = crate::security_memory::StoreFilter {
+        codes: vec!["v2".into()],
+        ..Default::default()
+    };
+    assert!(
+        manager
+            .find_similar_hybrid_in_store("render", 8, &filter)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        manager
+            .find_similar_hybrid_in_store("unrelated", 8, &Default::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
 fn manager_without_project_dir_does_not_use_process_cwd() {
     assert!(MemoryManager::new().get_project_dir().is_none());
 }

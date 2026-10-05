@@ -188,6 +188,7 @@ impl MemoryEntryEmbeddingExt for MemoryEntry {
 #[derive(Debug, Clone)]
 pub struct MemoryManager {
     project_dir: Option<PathBuf>,
+    store_path: Option<PathBuf>,
     /// When true, use isolated test storage instead of real memory
     test_mode: bool,
     include_skills: bool,
@@ -197,6 +198,7 @@ impl MemoryManager {
     pub fn new() -> Self {
         Self {
             project_dir: None,
+            store_path: None,
             test_mode: false,
             include_skills: true,
         }
@@ -205,6 +207,100 @@ impl MemoryManager {
     pub fn with_project_dir(mut self, project_dir: impl Into<PathBuf>) -> Self {
         self.project_dir = Some(project_dir.into());
         self
+    }
+
+    /// Explicit stores are isolated: no project/global files or legacy imports.
+    pub fn with_store_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.store_path = Some(path.into());
+        self
+    }
+
+    pub fn remember_in_store(&self, entry: MemoryEntry) -> Result<String> {
+        Ok(self.remember_batch_in_store(vec![entry])?.remove(0))
+    }
+
+    /// Embeds and merges the entries in order, loading and saving the store
+    /// once for the whole batch.
+    pub fn remember_batch_in_store(&self, entries: Vec<MemoryEntry>) -> Result<Vec<String>> {
+        let path = self
+            .store_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("explicit memory store path required"))?;
+        let mut graph = crate::security_memory::load_store(path)?;
+        let mut ids = Vec::with_capacity(entries.len());
+        for mut entry in entries {
+            if self.should_generate_embedding_for_entry(&entry) {
+                entry.ensure_embedding();
+            }
+            ids.push(crate::security_memory::merge_entry(&mut graph, entry));
+        }
+        crate::security_memory::save_store(path, &graph)?;
+        Ok(ids)
+    }
+
+    pub fn find_similar_hybrid_in_store(
+        &self,
+        query: &str,
+        limit: usize,
+        filter: &crate::security_memory::StoreFilter,
+    ) -> Result<Vec<(MemoryEntry, f32)>> {
+        let path = self
+            .store_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("explicit memory store path required"))?;
+        let graph = crate::security_memory::load_store(path)?;
+        let mut entries: Vec<_> = graph
+            .active_memories()
+            .filter(|e| filter.matches(e))
+            .cloned()
+            .collect();
+        entries.sort_by(|a, b| a.id.cmp(&b.id));
+        if entries.is_empty() || limit == 0 {
+            return Ok(vec![]);
+        }
+        // Keep lexical retrieval available when embeddings are unavailable.
+        // The normal memory ranker is left unchanged.
+        let sparse = bm25_rank(&entries, query, (limit * 5).max(HYBRID_POOL_MIN));
+        let embedding = if self.test_mode {
+            None
+        } else {
+            match crate::embedding_backend::embed_query_active(query) {
+                Ok(value) => Some(value),
+                Err(e) => {
+                    crate::logging::info(&format!("Security memory query embedding failed: {e}"));
+                    None
+                }
+            }
+        };
+        let mut dense = Vec::new();
+        if let Some((query_embedding, model)) = embedding {
+            for (i, entry) in entries.iter().enumerate() {
+                if entry.embedding_matches_model(&model) {
+                    dense.push((
+                        i,
+                        crate::embedding::cosine_similarity(
+                            &query_embedding,
+                            entry.embedding.as_ref().unwrap(),
+                        ),
+                    ));
+                }
+            }
+            dense.sort_by(|a, b| b.1.total_cmp(&a.1));
+            dense.truncate((limit * 5).max(HYBRID_POOL_MIN));
+        }
+        let mut scores = std::collections::HashMap::<usize, f32>::new();
+        for ranking in [sparse, dense] {
+            for (rank, (i, _)) in ranking.iter().enumerate() {
+                *scores.entry(*i).or_default() += 1.0 / (61.0 + rank as f32);
+            }
+        }
+        let mut ranked: Vec<_> = scores.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        Ok(ranked
+            .into_iter()
+            .take(limit)
+            .map(|(i, s)| (entries[i].clone(), s))
+            .collect())
     }
 
     pub fn with_skills(mut self, include_skills: bool) -> Self {
@@ -216,6 +312,7 @@ impl MemoryManager {
     pub fn new_test() -> Self {
         Self {
             project_dir: None,
+            store_path: None,
             test_mode: true,
             include_skills: true,
         }
@@ -2052,6 +2149,36 @@ fn bm25_rank(entries: &[MemoryEntry], query_text: &str, limit: usize) -> Vec<(us
     scored.sort_by(|a, b| b.1.total_cmp(&a.1));
     scored.truncate(limit);
     scored
+}
+
+impl crate::security_memory::MemoryBackend for MemoryManager {
+    fn remember(&self, path: &std::path::Path, entry: MemoryEntry) -> Result<String> {
+        self.clone().with_store_path(path).remember_in_store(entry)
+    }
+    fn remember_batch(
+        &self,
+        path: &std::path::Path,
+        entries: Vec<MemoryEntry>,
+    ) -> Result<Vec<String>> {
+        self.clone()
+            .with_store_path(path)
+            .remember_batch_in_store(entries)
+    }
+    fn retrieve(
+        &self,
+        path: &std::path::Path,
+        query: &str,
+        limit: usize,
+        filter: &crate::security_memory::StoreFilter,
+    ) -> Result<Vec<MemoryEntry>> {
+        Ok(self
+            .clone()
+            .with_store_path(path)
+            .find_similar_hybrid_in_store(query, limit, filter)?
+            .into_iter()
+            .map(|(entry, _)| entry)
+            .collect())
+    }
 }
 
 impl Default for MemoryManager {

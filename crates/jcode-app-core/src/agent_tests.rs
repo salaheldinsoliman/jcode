@@ -14,6 +14,12 @@ mod concurrency;
 #[path = "agent_tests/concurrency_construction.rs"]
 mod concurrency_construction;
 
+#[path = "agent_tests/security_memory.rs"]
+mod security_memory;
+
+#[path = "agent_tests/request_compatibility.rs"]
+mod request_compatibility;
+
 struct DelayedProvider {
     open_delay: Duration,
     first_event_delay: Duration,
