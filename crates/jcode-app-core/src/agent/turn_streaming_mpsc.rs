@@ -215,6 +215,11 @@ impl Agent {
 
             let prompt_has_recent_tool_result =
                 Self::messages_end_with_tool_result(&messages_with_memory);
+            // The task's security memory, then the security graph (see turn_loops).
+            if let Some(context) = self.security_memory_context_message_async().await {
+                ephemeral_signature_messages.push(context.clone());
+                messages_with_memory.push(context);
+            }
             let security_context_index = messages_with_memory.len();
             if let Some(context) = self.security_context_message()? {
                 ephemeral_signature_messages.push(context.clone());
@@ -867,10 +872,16 @@ impl Agent {
                             execution_mode: ToolExecutionMode::AgentTurn,
                         };
                         crate::telemetry::record_tool_call();
-                        let tool_result = self
-                            .registry
-                            .execute(&tool_name, ToolCall::normalize_input_to_object(input), ctx)
-                            .await;
+                        let input = ToolCall::normalize_input_to_object(input);
+                        let tool_result =
+                            self.registry.execute(&tool_name, input.clone(), ctx).await;
+                        Self::observe_security_tool(
+                            self.security_memory.as_ref(),
+                            &tool_name,
+                            &input,
+                            &tool_result,
+                            self.working_dir().map(std::path::Path::new),
+                        );
                         if tool_result.is_err() {
                             crate::telemetry::record_tool_failure();
                         }
@@ -1409,10 +1420,20 @@ impl Agent {
                 let registry_clone = self.registry.clone();
                 let tool_name_for_spawn = tc.name.clone();
                 let tool_input_for_spawn = tc.input.clone();
+                let security_memory = self.security_memory.clone();
+                let security_memory_root = ctx.working_dir.clone();
                 let tool_handle = tokio::spawn(async move {
-                    registry_clone
-                        .execute(&tool_name_for_spawn, tool_input_for_spawn, ctx)
-                        .await
+                    let result = registry_clone
+                        .execute(&tool_name_for_spawn, tool_input_for_spawn.clone(), ctx)
+                        .await;
+                    Self::observe_security_tool(
+                        security_memory.as_ref(),
+                        &tool_name_for_spawn,
+                        &tool_input_for_spawn,
+                        &result,
+                        security_memory_root.as_deref(),
+                    );
+                    result
                 });
 
                 // Reset background signal before waiting

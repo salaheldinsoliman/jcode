@@ -187,9 +187,15 @@ impl Agent {
             }
 
             // Keep continuation detection about the conversation, not its
-            // ephemeral security supplement.
+            // ephemeral security supplements.
             let prompt_has_recent_tool_result =
                 Self::messages_end_with_tool_result(&messages_with_memory);
+            // The task's security memory, then the security graph. The graph's
+            // index is taken after the memory message, so its request log never
+            // mistakes the memory message for the graph.
+            if let Some(context) = self.security_memory_context_message_async().await {
+                messages_with_memory.push(context);
+            }
             let security_context_index = messages_with_memory.len();
             if let Some(context) = self.security_context_message()? {
                 messages_with_memory.push(context);
@@ -701,10 +707,16 @@ impl Agent {
                             execution_mode: ToolExecutionMode::AgentTurn,
                         };
                         crate::telemetry::record_tool_call();
-                        let tool_result = self
-                            .registry
-                            .execute(&tool_name, ToolCall::normalize_input_to_object(input), ctx)
-                            .await;
+                        let input = ToolCall::normalize_input_to_object(input);
+                        let tool_result =
+                            self.registry.execute(&tool_name, input.clone(), ctx).await;
+                        Self::observe_security_tool(
+                            self.security_memory.as_ref(),
+                            &tool_name,
+                            &input,
+                            &tool_result,
+                            self.working_dir().map(std::path::Path::new),
+                        );
                         if tool_result.is_err() {
                             crate::telemetry::record_tool_failure();
                         }
@@ -1180,6 +1192,13 @@ impl Agent {
                 }));
 
                 let result = self.registry.execute(&tc.name, tc.input.clone(), ctx).await;
+                Self::observe_security_tool(
+                    self.security_memory.as_ref(),
+                    &tc.name,
+                    &tc.input,
+                    &result,
+                    self.working_dir().map(std::path::Path::new),
+                );
                 crate::telemetry::record_tool_call();
                 self.unlock_tools_if_needed(&tc.name);
                 let tool_elapsed = tool_start.elapsed();

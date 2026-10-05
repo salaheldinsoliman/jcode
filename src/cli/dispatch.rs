@@ -72,6 +72,10 @@ fn arm_debug_client_parent_death_signal() {
 fn arm_debug_client_parent_death_signal() {}
 
 pub(crate) async fn run_main(mut args: Args) -> Result<()> {
+    // Pure file operation: no provider, config migration, daemon or credentials.
+    if let Some(Command::SecurityMemoryMerge { store, deltas }) = &args.command {
+        return crate::security_memory::merge_files(store, deltas);
+    }
     arm_debug_client_parent_death_signal();
     if args.ssh.is_some() {
         // A remote session ID and working directory belong to the remote host.
@@ -135,6 +139,7 @@ pub(crate) async fn run_main(mut args: Args) -> Result<()> {
     }
 
     match args.command {
+        Some(Command::SecurityMemoryMerge { .. }) => unreachable!("handled before startup"),
         Some(Command::Serve {
             temporary_server,
             owner_pid,

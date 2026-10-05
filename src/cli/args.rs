@@ -145,6 +145,13 @@ pub(crate) struct Args {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Merge this task's security-memory deltas with the shared storage rules.
+    SecurityMemoryMerge {
+        #[arg(long)]
+        store: std::path::PathBuf,
+        #[arg(required = true)]
+        deltas: Vec<std::path::PathBuf>,
+    },
     /// Start the agent server (background daemon)
     Serve {
         /// Internal: mark this server as temporary so it can self-clean when its owner exits.

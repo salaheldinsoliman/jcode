@@ -49,6 +49,7 @@ pub mod logging;
 pub mod login_qr;
 pub mod mcp;
 pub mod memory;
+pub use jcode_security_memory as security_memory;
 pub mod memory_agent;
 pub mod memory_graph;
 pub mod memory_judge_metrics;
