@@ -188,6 +188,14 @@ pub(crate) enum Command {
 
     /// Run a single message and exit
     Run {
+        /// Run the coordinator on an already-running server, enabling native swarm workers.
+        #[arg(long)]
+        server: bool,
+
+        /// Shared coordinator/worker deadline for --server (seconds).
+        #[arg(long, requires = "server", default_value_t = 3600, value_parser = clap::value_parser!(u64).range(1..))]
+        timeout_secs: u64,
+
         /// Emit a machine-readable JSON result instead of streaming text
         #[arg(long, conflicts_with = "ndjson")]
         json: bool,

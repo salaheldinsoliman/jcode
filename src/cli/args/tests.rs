@@ -765,8 +765,12 @@ fn run_json_subcommand_parses() {
             json,
             ndjson,
             message,
+            server,
+            timeout_secs,
         }) => {
             assert!(json);
+            assert!(!server);
+            assert_eq!(timeout_secs, 3600);
             assert!(!ndjson);
             assert_eq!(message, "hello");
         }
@@ -782,6 +786,7 @@ fn run_ndjson_subcommand_parses() {
             json,
             ndjson,
             message,
+            ..
         }) => {
             assert!(!json);
             assert!(ndjson);
@@ -789,6 +794,24 @@ fn run_ndjson_subcommand_parses() {
         }
         other => panic!("unexpected command: {:?}", other),
     }
+}
+
+#[test]
+fn run_server_is_opt_in_with_a_positive_deadline() {
+    let args = Args::try_parse_from(["jcode", "run", "--server", "--timeout-secs", "180", "hello"])
+        .unwrap();
+    assert!(matches!(
+        args.command,
+        Some(Command::Run {
+            server: true,
+            timeout_secs: 180,
+            ..
+        })
+    ));
+    assert!(Args::try_parse_from(["jcode", "run", "--timeout-secs", "180", "hello"]).is_err());
+    assert!(
+        Args::try_parse_from(["jcode", "run", "--server", "--timeout-secs", "0", "hello"]).is_err()
+    );
 }
 
 #[test]

@@ -573,8 +573,12 @@ pub fn resolve_optional_comm_target_session(
     target: Option<String>,
     current_session: &str,
 ) -> String {
+    // Models often fill every optional field; an empty or blank target means
+    // "not given", not a session literally named "".
     match target {
-        Some(target) if target == "current" => current_session.to_string(),
+        Some(target) if target == "current" || target.trim().is_empty() => {
+            current_session.to_string()
+        }
         Some(target) => target,
         None => current_session.to_string(),
     }

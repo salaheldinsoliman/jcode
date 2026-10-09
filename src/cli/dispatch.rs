@@ -288,16 +288,31 @@ pub(crate) async fn run_main(mut args: Args) -> Result<()> {
             message,
             json,
             ndjson,
+            server,
+            timeout_secs,
         }) => {
-            commands::run_single_message_command(
-                &args.provider,
-                args.model.as_deref(),
-                args.resume.as_deref(),
-                &message,
-                json,
-                ndjson,
-            )
-            .await?;
+            if server {
+                super::run_server::run(
+                    &args.provider,
+                    args.model.as_deref(),
+                    args.resume.as_deref(),
+                    &message,
+                    json,
+                    ndjson,
+                    timeout_secs,
+                )
+                .await?;
+            } else {
+                commands::run_single_message_command(
+                    &args.provider,
+                    args.model.as_deref(),
+                    args.resume.as_deref(),
+                    &message,
+                    json,
+                    ndjson,
+                )
+                .await?;
+            }
         }
         Some(Command::Login {
             provider: login_provider,

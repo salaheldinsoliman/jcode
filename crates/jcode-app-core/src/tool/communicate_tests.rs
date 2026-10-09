@@ -966,6 +966,18 @@ fn resolve_optional_target_session_defaults_to_current() {
 }
 
 #[test]
+fn resolve_optional_target_session_treats_blank_as_absent() {
+    assert_eq!(
+        resolve_optional_target_session(Some(String::new()), "session_current"),
+        "session_current"
+    );
+    assert_eq!(
+        resolve_optional_target_session(Some("  ".to_string()), "session_current"),
+        "session_current"
+    );
+}
+
+#[test]
 fn schema_still_requires_action() {
     let schema = CommunicateTool::new().parameters_schema();
     assert_eq!(schema["required"], json!(["action"]));

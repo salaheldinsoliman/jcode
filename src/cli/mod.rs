@@ -13,6 +13,7 @@ pub mod output;
 pub mod proctitle;
 pub mod provider_doctor;
 pub mod provider_init;
+pub mod run_server;
 pub mod selfdev;
 pub mod ssh;
 #[cfg(unix)]

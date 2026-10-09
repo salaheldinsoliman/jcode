@@ -2204,6 +2204,10 @@ impl Tool for CommunicateTool {
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let mut params: CommunicateInput = serde_json::from_value(input)?;
+        // Models often send every optional field, unused ones as "". A blank session
+        // id means "not given", for every action.
+        params.to_session = params.to_session.filter(|s| !s.trim().is_empty());
+        params.target_session = params.target_session.filter(|s| !s.trim().is_empty());
 
         // `to_session` and `target_session` both name a single session id. Historically
         // different actions required different field names (e.g. `dm` wanted `to_session`
@@ -2847,6 +2851,41 @@ impl Tool for CommunicateTool {
             }
 
             "status" => {
+                // A coordinator asking about its workers by id, with no single target:
+                // report each listed session instead of ignoring the list.
+                let explicit_target = params
+                    .target_session
+                    .as_deref()
+                    .is_some_and(|t| !t.trim().is_empty());
+                let listed: Vec<String> = params
+                    .session_ids
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|id| !id.trim().is_empty())
+                    .collect();
+                if !explicit_target && !listed.is_empty() {
+                    let mut sections = Vec::new();
+                    for target in listed {
+                        let request = Request::CommStatus {
+                            id: REQUEST_ID,
+                            session_id: ctx.session_id.clone(),
+                            target_session: target.clone(),
+                        };
+                        let section = match send_request(request).await {
+                            Ok(ServerEvent::CommStatusResponse { snapshot, .. }) => {
+                                format_status_snapshot(&snapshot).output
+                            }
+                            Ok(response) => match ensure_success(&response) {
+                                Ok(()) => "No status snapshot returned.".to_string(),
+                                Err(e) => format!("Error: {e}"),
+                            },
+                            Err(e) => format!("Error: Failed to get status snapshot: {e}"),
+                        };
+                        sections.push(format!("## {target}\n{section}"));
+                    }
+                    return Ok(ToolOutput::new(sections.join("\n\n")));
+                }
                 let target =
                     resolve_optional_target_session(params.target_session, &ctx.session_id);
 
